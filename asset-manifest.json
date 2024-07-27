@@ -1,0 +1,21 @@
+{
+  "files": {
+    "main.css": "/india-tag/static/css/main.66940ceb.css",
+    "main.js": "/india-tag/static/js/main.4b91e80c.js",
+    "static/js/239.4ca98abb.chunk.js": "/india-tag/static/js/239.4ca98abb.chunk.js",
+    "static/js/213.b81d2b16.chunk.js": "/india-tag/static/js/213.b81d2b16.chunk.js",
+    "static/js/732.4bad4354.chunk.js": "/india-tag/static/js/732.4bad4354.chunk.js",
+    "static/js/453.0e6681fd.chunk.js": "/india-tag/static/js/453.0e6681fd.chunk.js",
+    "index.html": "/india-tag/index.html",
+    "main.66940ceb.css.map": "/india-tag/static/css/main.66940ceb.css.map",
+    "main.4b91e80c.js.map": "/india-tag/static/js/main.4b91e80c.js.map",
+    "239.4ca98abb.chunk.js.map": "/india-tag/static/js/239.4ca98abb.chunk.js.map",
+    "213.b81d2b16.chunk.js.map": "/india-tag/static/js/213.b81d2b16.chunk.js.map",
+    "732.4bad4354.chunk.js.map": "/india-tag/static/js/732.4bad4354.chunk.js.map",
+    "453.0e6681fd.chunk.js.map": "/india-tag/static/js/453.0e6681fd.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.66940ceb.css",
+    "static/js/main.4b91e80c.js"
+  ]
+}
