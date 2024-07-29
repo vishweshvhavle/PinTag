@@ -2,7 +2,6 @@ import argparse
 import cv2
 import numpy as np
 from pdf2image import convert_from_path
-
 import os
 
 def save_lab_channels(img, output_dir):
