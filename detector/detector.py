@@ -8,13 +8,12 @@ class PinTagDetector:
     def __init__(self, debug=False, debug_dir="debug/", template_size=200,
                  inner_threshold=150, outer_threshold=180, 
                  red_threshold=100, green_threshold=150, 
-                 min_aspect_ratio=0.5, max_aspect_ratio=6.0, min_roundness=0.5) -> None:
+                 min_aspect_ratio=0.5, max_aspect_ratio=6.0, min_roundness=0.5,
+                 plot_normals=False) -> None:
         
         self.img = None
         self.debug = debug
         self.debug_dir = debug_dir
-        self.id = None
-        self.pose = None
         self.orienatation_matrix = None
         self.template_size = template_size
         self.centers = [(self.template_size//4, self.template_size//4), 
@@ -31,6 +30,9 @@ class PinTagDetector:
         self.max_aspect_ratio = max_aspect_ratio
         self.min_roundness = min_roundness
         self.lab = None
+        self.plot_normals = plot_normals
+        self.original_img = None
+        self.perspective_matrix = None
     
     def is_round(self, contour) -> bool:
         # Calculate the bounding rectangle
@@ -150,6 +152,10 @@ class PinTagDetector:
         plt.close()
 
         print(f"Perspective transform applied. Input points: {rect}, Output points: {dst}")
+
+        # Store the perspective transform matrix
+        self.perspective_matrix = M
+        self.img = cv2.warpPerspective(b_channel, M, (self.template_size, self.template_size))
     
     def decode_orientation_debug(self) -> None:
         self.orienatation_matrix = np.zeros((4, 4), dtype=np.uint8)
@@ -275,6 +281,9 @@ class PinTagDetector:
         # Compute the perspective transform matrix and apply it
         M = cv2.getPerspectiveTransform(rect, dst)
         self.img = cv2.warpPerspective(b_channel, M, (self.template_size, self.template_size))
+
+        # Store the perspective transform matrix
+        self.perspective_matrix = M
     
     def decode_orientation(self) -> None:
         self.orienatation_matrix = np.zeros((4, 4), dtype=np.uint8)
@@ -308,6 +317,95 @@ class PinTagDetector:
             if self.img[y, x] > self.green_threshold:
                 value |= (1 << (7 - i))
         return value
+
+    def plot_normal_vectors(self) -> None:
+        if not self.plot_normals or self.perspective_matrix is None or self.original_img is None:
+            return
+
+        # Calculate the inverse perspective matrix
+        inv_perspective = np.linalg.inv(self.perspective_matrix)
+
+        unnormalized_coords = []
+        normalized_coords = []
+        
+        for center in self.centers:
+            # Convert center to homogeneous coordinates by adding a 1
+            homogeneous_center = np.append(center, 1)
+            transformed_center = inv_perspective.dot(homogeneous_center)
+            
+            # Normalize the coordinates
+            normalized_center = transformed_center / transformed_center[2]
+            
+            # Convert the first two coordinates to integers
+            normalized_coord = tuple(map(int, normalized_center[:2]))
+            unnormalized_coords.append(transformed_center)
+            normalized_coords.append(normalized_center)
+            
+            # Plot the point on the image
+            cv2.circle(self.original_img, normalized_coord, radius=5, color=(0, 255, 0), thickness=-1)
+        
+        if len(unnormalized_coords) >= 3:
+            # Use the mean of self.centers to estimate the normal vector origin
+            mean_center = np.mean(self.centers, axis=0)
+            homogeneous_mean_center = np.append(mean_center, 1)
+            transformed_mean_center = inv_perspective.dot(homogeneous_mean_center)
+            normalized_mean_center = transformed_mean_center / transformed_mean_center[2]
+            
+            origin = normalized_mean_center
+            origin_2d = tuple(map(int, origin[:2]))
+            
+            # Use the first three points to estimate the normal vector
+            p1 = np.array(unnormalized_coords[0])
+            p2 = np.array(unnormalized_coords[1])
+            p3 = np.array(unnormalized_coords[2])
+            
+            # Calculate vectors on the plane
+            v1 = p2 - p1
+            v2 = p3 - p1
+            
+            # Compute the normal vector using the cross product
+            normal = np.cross(v1[:3], v2[:3])            
+            normal *= -1
+
+            # Calculate scales for each axis based on transformed normalized coords
+            # X-axis scale based on (self.template_size//4, self.template_size//4) and (3*1self.template_size//4, self.template_size//4)
+            x1 = np.append([self.template_size//4, self.template_size//4], 1)
+            x2 = np.append([3*self.template_size//4, self.template_size//4], 1)
+            transformed_x1 = inv_perspective.dot(x1)
+            transformed_x2 = inv_perspective.dot(x2)
+            scale_x = np.linalg.norm(transformed_x2[:2] / transformed_x2[2] - transformed_x1[:2] / transformed_x1[2])
+            
+            # Y-axis scale based on (self.template_size//4, self.template_size//4) and (self.template_size//4, 3*self.template_size//4)
+            y1 = np.append([self.template_size//4, self.template_size//4], 1)
+            y2 = np.append([self.template_size//4, 3*self.template_size//4], 1)
+            transformed_y1 = inv_perspective.dot(y1)
+            transformed_y2 = inv_perspective.dot(y2)
+            scale_y = np.linalg.norm(transformed_y2[:2] / transformed_y2[2] - transformed_y1[:2] / transformed_y1[2])
+
+            # Mid points for X and Y axes
+            x_mid = (np.array(transformed_x1) + np.array(transformed_x2)) / 2
+            x_mid_norm = x_mid[:2] / x_mid[2]
+            x_end = tuple(map(int, x_mid_norm))
+
+            y_mid = (np.array(transformed_y1) + np.array(transformed_y2)) / 2
+            y_mid_norm = y_mid[:2] / y_mid[2]
+            y_end = tuple(map(int, y_mid_norm))
+
+            cv2.line(self.original_img, origin_2d, x_end, (0, 0, 255), 2)  # X-axis in red
+            cv2.line(self.original_img, origin_2d, y_end, (0, 255, 0), 2)  # Y-axis in green
+
+            # Z-axis scale (adjust this value if needed)
+            scale_z = 10
+
+            # Calculate the end points for the Z-axis
+            end_point = origin[:2] + normal[:2] * scale_z
+            end_point = tuple(map(int, end_point))
+
+            # Plot the Z-axis (normal vector) in blue
+            cv2.line(self.original_img, origin_2d, end_point, (255, 0, 0), 2)
+
+        # Save the image
+        cv2.imwrite('output_image.jpg', self.original_img) 
 
     def detect(self, img) -> list:
         if self.debug:
@@ -369,17 +467,24 @@ class PinTagDetector:
             print(f"Checksum verification failed: {sum(values)} != {checksum}")
             return None
         
+        if self.plot_normals:
+            self.original_img = img.copy()
+            self.plot_normal_vectors()
+        
         return values
 
 def main() -> None:
     parser = argparse.ArgumentParser(description='Detect PinTag from Images')
     parser.add_argument('--input_image', type=str, required=True, help='Path to the IndiaTag image')
-    parser.add_argument('--debug', type=bool, default=False, help='Directory to save output images')
+    parser.add_argument('--debug', action='store_true', help='Directory to save output images')
+    parser.add_argument('--plot_normals', action='store_true', help='Plot normal vectors on the original image')
     args = parser.parse_args()
 
     if args.debug:
         os.makedirs("debug/", exist_ok=True)
         detector = PinTagDetector(debug=True, debug_dir="debug/")
+    if args.plot_normals:
+        detector = PinTagDetector(plot_normals=args.plot_normals)
     else:
         detector = PinTagDetector()
     
