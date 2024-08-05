@@ -14,7 +14,7 @@ class PinTagDetector:
         self.img = None
         self.debug = debug
         self.debug_dir = debug_dir
-        self.orienatation_matrix = None
+        self.orientation_matrix = None
         self.template_size = template_size
         self.centers = [(self.template_size//4, self.template_size//4), 
                         (3*self.template_size//4, self.template_size//4), 
@@ -51,6 +51,16 @@ class PinTagDetector:
             return False
 
         return True
+
+    def get_adjusted_center_order(self) -> (list, int): # type: ignore
+        if np.array_equal(self.orientation_matrix, np.array([[1, 0, 0, 1], [1, 0, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1]])):
+            return [self.centers[1], self.centers[3], self.centers[0], self.centers[2]], 1
+        elif np.array_equal(self.orientation_matrix, np.array([[0, 1, 1, 0], [1, 0, 0, 1], [0, 1, 1, 0], [0, 1, 1, 0]])):
+            return [self.centers[2], self.centers[0], self.centers[3], self.centers[1]], 3
+        elif np.array_equal(self.orientation_matrix, np.array([[0, 0, 1, 1], [1, 1, 0, 0], [1, 1, 0, 0], [1, 1, 0, 0]])):
+            return [self.centers[3], self.centers[2], self.centers[1], self.centers[0]], 2
+        else:
+            return self.centers, 0
 
     def find_red_circles_debug(self) -> list:
         a_channel = self.lab[:, :, 1]
@@ -158,7 +168,7 @@ class PinTagDetector:
         self.img = cv2.warpPerspective(b_channel, M, (self.template_size, self.template_size))
     
     def decode_orientation_debug(self) -> None:
-        self.orienatation_matrix = np.zeros((4, 4), dtype=np.uint8)
+        self.orientation_matrix = np.zeros((4, 4), dtype=np.uint8)
         fig, ax = plt.subplots(figsize=(10, 10))
         ax.imshow(self.img, cmap='gray')
         ax.set_title('Orientation Decoding')
@@ -170,7 +180,7 @@ class PinTagDetector:
                 y = int(center[1] + self.inner_radius * np.sin(angle))
 
                 if self.img[y, x] > self.red_threshold:
-                    self.orienatation_matrix[i, j] = 1
+                    self.orientation_matrix[i, j] = 1
                     ax.plot(x, y, 'ro')
                 else:
                     ax.plot(x, y, 'bo')
@@ -180,53 +190,44 @@ class PinTagDetector:
         plt.savefig(os.path.join(self.debug_dir, 'orientation_decoding.png'))
         plt.close()
 
-        print(f"Orientation matrix:\n{self.orienatation_matrix}")
-        
-        # rotate left 90
-        if np.array_equal(self.orienatation_matrix, np.array([[1, 0, 0, 1], [1, 0, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1]])):
-            self.img = cv2.rotate(self.img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            print("Image rotated 90 degrees counterclockwise")
-        # rotate upside down
-        elif np.array_equal(self.orienatation_matrix, np.array([[0, 0, 1, 1], [1, 1, 0, 0], [1, 1, 0, 0], [1, 1, 0, 0]])):
-            self.img = cv2.rotate(self.img, cv2.ROTATE_180)
-            print("Image rotated 180 degrees")
-        # rotate right 90
-        elif np.array_equal(self.orienatation_matrix, np.array([[0, 1, 1, 0], [1, 0, 0, 1], [0, 1, 1, 0], [0, 1, 1, 0]])):
-            self.img = cv2.rotate(self.img, cv2.ROTATE_90_CLOCKWISE)
-            print("Image rotated 90 degrees clockwise")
-        else:
-            print("No rotation applied")
-
-        plt.imshow(self.img, cmap='gray')
-        plt.title('Image After Orientation Correction')
-        plt.savefig(os.path.join(self.debug_dir, 'orientation_corrected.png'))
-        plt.close()
+        print(f"Orientation matrix:\n{self.orientation_matrix}")
     
-    def decode_green_sectors_debug(self, center) -> int:
-        value = 0
+    def decode_green_sectors_debug(self) -> list:
+        values = []
         fig, ax = plt.subplots(figsize=(10, 10))
         ax.imshow(self.img, cmap='gray')
-        ax.set_title(f'Green Sector Decoding - Center {center}')
+        ax.set_title('Green Sector Decoding - All Centers')
 
-        for i in range(8):
-            angle = (i * np.pi / 4) + np.pi / 8
-            x = int(center[0] + self.average_radius * np.cos(angle))
-            y = int(center[1] + self.average_radius * np.sin(angle))
-            
-            # Check the green channel value at the sampled point
-            if self.img[y, x] > self.green_threshold:
-                value |= (1 << (7 - i))
-                ax.plot(x, y, 'go')
-            else:
-                ax.plot(x, y, 'ro')
+        adjusted_centers, rotation = self.get_adjusted_center_order()
+        print(f"Adjusted centers: {adjusted_centers}, Rotation: {rotation}")
+        for center_idx, center in enumerate(adjusted_centers):
+            value = 0
+            for i in range(8):
+                angle = ((i + 2 * rotation) % 8 * np.pi / 4) + np.pi / 8
+                angle_deg = np.degrees(angle)
+                print(f"Angle: {angle_deg}")
+                x = int(center[0] + self.average_radius * np.cos(angle))
+                y = int(center[1] + self.average_radius * np.sin(angle))
+                
+                if self.img[y, x] > self.green_threshold:
+                    value |= (1 << (7 - i))
+                    ax.plot(x, y, 'go')
+                else:
+                    ax.plot(x, y, 'ro')
+                
+                if i == 0:
+                    ax.plot(x, y, 'bo')
+                    ax.text(x, y, f"Center {center_idx}", fontsize=12, color='white')
 
-            print(f"Sector {i}: ({x}, {y}) - Value: {self.img[y, x]}")
+                print(f"Center {center_idx}, Sector {i}: ({x}, {y}) - Value: {self.img[y, x]}")
 
-        plt.savefig(os.path.join(self.debug_dir, f'green_sector_decoding_center_{center[0]}_{center[1]}.png'))
+            values.append(value)
+            print(f"Decoded value for center {center_idx}: {value}")
+
+        plt.savefig(os.path.join(self.debug_dir, 'green_sector_decoding_all_centers.png'))
         plt.close()
 
-        print(f"Decoded value for center {center}: {value}")
-        return value
+        return values
 
     def find_red_circles(self) -> list:
         a_channel = self.lab[:, :, 1]
@@ -286,7 +287,7 @@ class PinTagDetector:
         self.perspective_matrix = M
     
     def decode_orientation(self) -> None:
-        self.orienatation_matrix = np.zeros((4, 4), dtype=np.uint8)
+        self.orientation_matrix = np.zeros((4, 4), dtype=np.uint8)
         for i, center in enumerate(self.centers):
             for j in range(4):
                 angle = (j * np.pi / 2) + (np.pi / 4)
@@ -294,121 +295,67 @@ class PinTagDetector:
                 y = int(center[1] + self.inner_radius * np.sin(angle))
 
                 if self.img[y, x] > self.red_threshold:
-                    self.orienatation_matrix[i, j] = 1
-        
-        # rotate left 90
-        if np.array_equal(self.orienatation_matrix, np.array([[1, 0, 0, 1], [1, 0, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1]])):
-            self.img = cv2.rotate(self.img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        # rotate upside down
-        elif np.array_equal(self.orienatation_matrix, np.array([[0, 0, 1, 1], [1, 1, 0, 0], [1, 1, 0, 0], [1, 1, 0, 0]])):
-            self.img = cv2.rotate(self.img, cv2.ROTATE_180)
-        # rotate right 90
-        elif np.array_equal(self.orienatation_matrix, np.array([[0, 1, 1, 0], [1, 0, 0, 1], [0, 1, 1, 0], [0, 1, 1, 0]])):
-            self.img = cv2.rotate(self.img, cv2.ROTATE_90_CLOCKWISE)
+                    self.orientation_matrix[i, j] = 1
     
-    def decode_green_sectors(self, center) -> int:
-        value = 0
-        for i in range(8):
-            angle = (i * np.pi / 4) + np.pi / 8
-            x = int(center[0] + self.average_radius * np.cos(angle))
-            y = int(center[1] + self.average_radius * np.sin(angle))
-            
-            # Check the green channel value at the sampled point
-            if self.img[y, x] > self.green_threshold:
-                value |= (1 << (7 - i))
-        return value
+    def decode_green_sectors(self) -> list:
+        values = []
+        adjusted_centers, rotation = self.get_adjusted_center_order()
+        for center in adjusted_centers:
+            value = 0
+            for i in range(8):
+                angle = ((i + 2 * rotation) % 8 * np.pi / 4) + np.pi / 8
+                x = int(center[0] + self.average_radius * np.cos(angle))
+                y = int(center[1] + self.average_radius * np.sin(angle))
+                
+                if self.img[y, x] > self.green_threshold:
+                    value |= (1 << (7 - i))
+            values.append(value)
+        return values
 
     def plot_normal_vectors(self) -> None:
-        if not self.plot_normals or self.perspective_matrix is None or self.original_img is None:
-            return
-
-        # Calculate the inverse perspective matrix
         inv_perspective = np.linalg.inv(self.perspective_matrix)
 
-        unnormalized_coords = []
-        normalized_coords = []
+        def transform_point(point):
+            homogeneous = np.append(point, 1)
+            transformed = inv_perspective.dot(homogeneous)
+            return transformed
         
-        for center in self.centers:
-            # Convert center to homogeneous coordinates by adding a 1
-            homogeneous_center = np.append(center, 1)
-            transformed_center = inv_perspective.dot(homogeneous_center)
-            
-            # Normalize the coordinates
-            normalized_center = transformed_center / transformed_center[2]
-            
-            # Convert the first two coordinates to integers
-            normalized_coord = tuple(map(int, normalized_center[:2]))
-            unnormalized_coords.append(transformed_center)
-            normalized_coords.append(normalized_center)
-            
-            # Plot the point on the image
-            cv2.circle(self.original_img, normalized_coord, radius=5, color=(0, 255, 0), thickness=-1)
+        unnormalized_coords = [transform_point(center) for center in self.centers]
         
         if len(unnormalized_coords) >= 3:
-            # Use the mean of self.centers to estimate the normal vector origin
-            mean_center = np.mean(self.centers, axis=0)
-            homogeneous_mean_center = np.append(mean_center, 1)
-            transformed_mean_center = inv_perspective.dot(homogeneous_mean_center)
-            normalized_mean_center = transformed_mean_center / transformed_mean_center[2]
-            
-            origin = normalized_mean_center
+            origin = np.mean(unnormalized_coords, axis=0)
+            origin = origin / origin[2]
             origin_2d = tuple(map(int, origin[:2]))
             
-            # Use the first three points to estimate the normal vector
-            p1 = np.array(unnormalized_coords[0])
-            p2 = np.array(unnormalized_coords[1])
-            p3 = np.array(unnormalized_coords[2])
-            
-            # Calculate vectors on the plane
-            v1 = p2 - p1
-            v2 = p3 - p1
-            
-            # Compute the normal vector using the cross product
-            normal = np.cross(v1[:3], v2[:3])            
-            normal *= -1
+            p1, p2, p3 = [np.array(coord) for coord in unnormalized_coords[:3]]
+            normal = -1 * np.cross(p2[:3] - p1[:3], p3[:3] - p1[:3])
 
-            # Calculate scales for each axis based on transformed normalized coords
-            # X-axis scale based on (self.template_size//4, self.template_size//4) and (3*1self.template_size//4, self.template_size//4)
+            # Calculate the end points for the X-axis
             x1 = np.append([self.template_size//4, self.template_size//4], 1)
             x2 = np.append([3*self.template_size//4, self.template_size//4], 1)
-            transformed_x1 = inv_perspective.dot(x1)
-            transformed_x2 = inv_perspective.dot(x2)
-            scale_x = np.linalg.norm(transformed_x2[:2] / transformed_x2[2] - transformed_x1[:2] / transformed_x1[2])
+            x_mid = (np.array(inv_perspective.dot(x1)) + np.array(inv_perspective.dot(x2))) / 2
+            x_end = tuple(map(int, x_mid[:2] / x_mid[2]))
             
-            # Y-axis scale based on (self.template_size//4, self.template_size//4) and (self.template_size//4, 3*self.template_size//4)
+            # Calculate the end points for the Y-axis
             y1 = np.append([self.template_size//4, self.template_size//4], 1)
             y2 = np.append([self.template_size//4, 3*self.template_size//4], 1)
-            transformed_y1 = inv_perspective.dot(y1)
-            transformed_y2 = inv_perspective.dot(y2)
-            scale_y = np.linalg.norm(transformed_y2[:2] / transformed_y2[2] - transformed_y1[:2] / transformed_y1[2])
+            y_mid = (np.array(inv_perspective.dot(y1)) + np.array(inv_perspective.dot(y2))) / 2
+            y_end = tuple(map(int, y_mid[:2] / y_mid[2]))
 
-            # Mid points for X and Y axes
-            x_mid = (np.array(transformed_x1) + np.array(transformed_x2)) / 2
-            x_mid_norm = x_mid[:2] / x_mid[2]
-            x_end = tuple(map(int, x_mid_norm))
+            # Calculate Z-axis end point
+            z_end = origin[:2] + normal[:2] * ((np.linalg.norm(np.array(x_end) - origin[:2]) + np.linalg.norm(np.array(y_end) - origin[:2])) / 2) / np.linalg.norm(normal[:2])
+            z_end = tuple(map(int, z_end))
 
-            y_mid = (np.array(transformed_y1) + np.array(transformed_y2)) / 2
-            y_mid_norm = y_mid[:2] / y_mid[2]
-            y_end = tuple(map(int, y_mid_norm))
+            cv2.line(self.original_img, origin_2d, x_end, (0, 0, 255), 2) 
+            cv2.line(self.original_img, origin_2d, y_end, (0, 255, 0), 2)
+            cv2.line(self.original_img, origin_2d, z_end, (255, 0, 0), 2)
 
-            cv2.line(self.original_img, origin_2d, x_end, (0, 0, 255), 2)  # X-axis in red
-            cv2.line(self.original_img, origin_2d, y_end, (0, 255, 0), 2)  # Y-axis in green
-
-            # Z-axis scale (adjust this value if needed)
-            scale_z = 10
-
-            # Calculate the end points for the Z-axis
-            end_point = origin[:2] + normal[:2] * scale_z
-            end_point = tuple(map(int, end_point))
-
-            # Plot the Z-axis (normal vector) in blue
-            cv2.line(self.original_img, origin_2d, end_point, (255, 0, 0), 2)
-
-        # Save the image
         cv2.imwrite('output_image.jpg', self.original_img) 
 
     def detect(self, img) -> list:
         if self.debug:
+            print("Saving debug images to debug/ directory")
+
             # Convert the image to the LAB color space
             self.lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
             print("Converted image to LAB color space")
@@ -427,10 +374,7 @@ class PinTagDetector:
             print("Orientation decoded")
 
             # Decode values from the green sectors
-            values = []
-            for i, center in enumerate(self.centers):
-                value = self.decode_green_sectors_debug(center)
-                values.append(value)
+            values = self.decode_green_sectors_debug()
             print("Green sectors decoded")
             
             # Last circle contains the checksum
@@ -443,7 +387,7 @@ class PinTagDetector:
             
             return values
 
-        # Convert the image to the LAB color space
+        # Non-debug mode
         self.lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         centroids = self.find_red_circles()
         
@@ -454,10 +398,7 @@ class PinTagDetector:
         self.decode_orientation()
 
         # Decode values from the green sectors
-        values = []
-        for i, center in enumerate(self.centers):
-            value = self.decode_green_sectors(center)
-            values.append(value)
+        values = self.decode_green_sectors()
         
         # Last circle contains the checksum
         checksum = values.pop()
@@ -479,14 +420,18 @@ def main() -> None:
     parser.add_argument('--debug', action='store_true', help='Directory to save output images')
     parser.add_argument('--plot_normals', action='store_true', help='Plot normal vectors on the original image')
     args = parser.parse_args()
-
     if args.debug:
+        print("Running in debug mode")
         os.makedirs("debug/", exist_ok=True)
-        detector = PinTagDetector(debug=True, debug_dir="debug/")
-    if args.plot_normals:
-        detector = PinTagDetector(plot_normals=args.plot_normals)
+        if args.plot_normals:
+            detector = PinTagDetector(debug=True, debug_dir="debug/",plot_normals=args.plot_normals)
+        else:
+            detector = PinTagDetector(debug=True, debug_dir="debug/")
     else:
-        detector = PinTagDetector()
+        if args.plot_normals:
+            detector = PinTagDetector(plot_normals=args.plot_normals)
+        else:
+            detector = PinTagDetector()
     
     img = cv2.imread(args.input_image)
     result = detector.detect(img)

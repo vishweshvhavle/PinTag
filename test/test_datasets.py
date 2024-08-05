@@ -51,7 +51,7 @@ def process_dataset(dataset_path, detector_func, log_file, output_log_file):
 
     return successful_detections, len(failed_frames), detection_times
 
-def detect_indiatag_wrapper(img):
+def detect_pintag(img):
     detector = PinTagDetector()
     result = detector.detect(img)
     return result if result else None
@@ -70,7 +70,7 @@ def detect_aruco(img):
 
 def main():
     datasets = {
-        'india_tags': ('data/india_tags', detect_indiatag_wrapper, 'failed_frames_logs_indiatag.txt', 'output_logs_indiatag.json'),
+        'india_tags': ('data/pin_tags', detect_pintag, 'failed_frames_logs_pintag.txt', 'output_logs_pintag.json'),
         'april_tags': ('data/april_tags', detect_apriltag, 'failed_frames_logs_apriltag.txt', 'output_logs_apriltag.json'),
         'aruco_tags': ('data/aruco_tags', detect_aruco, 'failed_frames_logs_aruco.txt', 'output_logs_aruco.json')
     }
