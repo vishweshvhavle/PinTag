@@ -7,3 +7,7 @@ python detector/detector.py --input_image data/sample/frame_0049.png --plot_norm
 python detector/detector.py --input_image data/sample/sim_input_3.jpg --debug
 python detector/detector.py --input_image data/sample/wild_input_11.png --max_ids 2 --plot_normals
 ```
+## Test
+```bash
+python test/test_datasets.py 
+```
