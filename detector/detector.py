@@ -460,6 +460,10 @@ class PinTagDetector:
             else:
                 results.append(values)
         
+        if self.plot_normals:
+            self.original_img = img.copy()
+            self.plot_normal_vectors(output_dir=".")
+        
         if results:
             return results
         return None
