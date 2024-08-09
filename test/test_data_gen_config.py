@@ -24,7 +24,7 @@ shader_params = {
     "eye_pos": [0.0, 0.0, 5.0]
 }
 gaussian_blur_params = {
-    "kernel_size": (5, 5),
+    "kernel_size": (1, 1),
     "sigma": 0
 }
 grain_noise_params = {
@@ -290,12 +290,12 @@ def main(args):
         image = np.frombuffer(image_buffer, dtype=np.uint8).reshape(height, width, 3)
         image = cv2.flip(image, 0)  # Flip vertically
         
-        # Apply filters
-        image = apply_gaussian_blur(image, gaussian_blur_params['kernel_size'], gaussian_blur_params['sigma'])
-        image = apply_grain_noise(image, grain_noise_params['intensity'], grain_noise_params['density'])
+        # # Apply filters
+        # image = apply_gaussian_blur(image, gaussian_blur_params['kernel_size'], gaussian_blur_params['sigma'])
+        # image = apply_grain_noise(image, grain_noise_params['intensity'], grain_noise_params['density'])
         
         # Save image
-        output_path = os.path.join(args.output_dir, f"frame_{i:04d}.png")
+        output_path = os.path.join(args.output_dir, f"frame_{i:04d}_theta_{int(theta):03}_phi_{int(phi):03}_radius_{int(radius):}.png")
         cv2.imwrite(output_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
         
         glfw.swap_buffers(window)
@@ -308,11 +308,11 @@ if __name__ == "__main__":
     parser.add_argument("--pdf_file", type=str, required=True, help="Path to the PDF file")
     parser.add_argument("--axis", type=float, nargs=3, default=[1.0, 0.0, 0.0], help="Axis to rotate the model along")
     parser.add_argument("--angle", type=float, default=0.0, help="Angle to rotate the model")
-    parser.add_argument("--scale", type=float, default=0.005, help="Scale for OBJ model file")
+    parser.add_argument("--scale", type=float, default=0.001, help="Scale for OBJ model file")
     parser.add_argument("--theta", type=float, default=0.0, help="Initial theta angle for viewing")
     parser.add_argument("--phi", type=float, default=0.0, help="Initial phi angle for viewing")
     parser.add_argument("--radius", type=float, default=5.0, help="Initial radius for viewing")
-    parser.add_argument("--kernel_size", type=int, default=5, help="Kernel size for Gaussian blur")
+    parser.add_argument("--kernel_size", type=int, default=1, help="Kernel size for Gaussian blur")
     parser.add_argument("--sigma", type=float, default=0.0, help="Sigma value for Gaussian blur")
     parser.add_argument("--config_file", type=str, required=True, help="Path to JSON config file")
     parser.add_argument("--output_dir", type=str, required=True, help="Directory to save output images")
