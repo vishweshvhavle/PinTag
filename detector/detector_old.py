@@ -81,7 +81,7 @@ class PinTagDetector:
         self.img = None
         self.debug = debug
         self.debug_dir = debug_dir
-        self.red_matrix = None
+        self.orientation_matrix = None
         self.max_ids = max_ids
         self.template_size = template_size
         self.centers = [(self.template_size//4, self.template_size//4), 
@@ -101,14 +101,8 @@ class PinTagDetector:
         self.plot_normals = plot_normals
         self.original_img = None
         self.perspective_matrices = {}
-        self.inv_perspective_matrices = {}
-        self.inv_perspective = None
         self.centroid_groups = {}
         self.centroid_group_ids = []
-        self.parity = []
-        self.red_query_list = []
-        self.green_query_list = []
-        self.rotation = 0
     
     def is_round(self, contour) -> bool:
         # Calculate the bounding rectangle
@@ -129,6 +123,16 @@ class PinTagDetector:
             return False
 
         return True
+
+    def get_adjusted_center_order(self) -> (list, int): # type: ignore
+        if np.array_equal(self.orientation_matrix, np.array([[1, 0, 0, 1], [1, 0, 0, 1], [0, 1, 1, 0], [1, 0, 0, 1]])):
+            return [self.centers[1], self.centers[3], self.centers[0], self.centers[2]], 1
+        elif np.array_equal(self.orientation_matrix, np.array([[0, 1, 1, 0], [1, 0, 0, 1], [0, 1, 1, 0], [0, 1, 1, 0]])):
+            return [self.centers[2], self.centers[0], self.centers[3], self.centers[1]], 3
+        elif np.array_equal(self.orientation_matrix, np.array([[0, 0, 1, 1], [1, 1, 0, 0], [1, 1, 0, 0], [1, 1, 0, 0]])):
+            return [self.centers[3], self.centers[2], self.centers[1], self.centers[0]], 2
+        else:
+            return self.centers, 0
 
     def find_red_circles_debug(self) -> list:
         a_channel = self.lab[:, :, 1]
@@ -243,8 +247,46 @@ class PinTagDetector:
         # Store the perspective transform matrix
         self.perspective_matrices[centroids_id] = M
         self.img = cv2.warpPerspective(b_channel, M, (self.template_size, self.template_size))
-        self.inv_perspective_matrices[centroids_id] = np.linalg.inv(M)
-        self.inv_perspective = self.inv_perspective_matrices[centroids_id]
+    
+    def decode_orientation_debug(self, centroid_group_id) -> None:
+        self.orientation_matrix = np.zeros((4, 4), dtype=np.uint8)
+        fig, ax = plt.subplots(figsize=(10, 10))
+        ax.imshow(self.img, cmap='gray')
+        # ax.set_title(f'Orientation Decoding - Centroid Group ID: {centroid_group_id}')
+
+        all_sector_values = []
+
+        for i, center in enumerate(self.centers):
+            sector_values = []
+            for j in range(4):
+                angle = (j * np.pi / 2) + (np.pi / 4)
+                x = int(center[0] + self.inner_radius * np.cos(angle))
+                y = int(center[1] + self.inner_radius * np.sin(angle))
+                sector_values.append(self.img[y, x])
+            all_sector_values.extend(sector_values)
+
+        # Dynamic thresholding to decode the values
+        self.red_threshold = self.dynamic_threshold_decode(all_sector_values)
+
+        for i, center in enumerate(self.centers):
+            for j in range(4):
+                angle = (j * np.pi / 2) + (np.pi / 4)
+                x = int(center[0] + self.inner_radius * np.cos(angle))
+                y = int(center[1] + self.inner_radius * np.sin(angle))
+                if self.img[y, x] > self.red_threshold:
+                    self.orientation_matrix[i, j] = 1
+                    ax.plot(x, y, 'go')
+                else:
+                    ax.plot(x, y, 'ro')
+
+                print(f"Center {i}, Angle {j}: ({x}, {y}) - Value: {self.img[y, x]}")
+
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.debug_dir, f'orientation_decoding_{centroid_group_id}.png'))
+        plt.close()
+
+        print(f"Orientation matrix:\n{self.orientation_matrix}")
     
     def dynamic_threshold_decode(self, values) -> float:
         groups = []
@@ -258,106 +300,59 @@ class PinTagDetector:
         groups.sort(key=len, reverse=True)
         threshold = (sum(groups[0]) / len(groups[0]) + sum(groups[1]) / len(groups[1])) / 2
         return threshold
-    
-    def decode_orientation_debug(self, centroid_group_id) -> None:
-        self.red_matrix = np.ones((4, 4), dtype=np.uint8)
-        fig, ax = plt.subplots(figsize=(10, 10))
-        ax.imshow(self.img, cmap='gray')
-        # ax.set_title(f'Orientation Decoding - Centroid Group ID: {centroid_group_id}')
-        self.red_query_list = [(42, 42), (42, 57), (42, 142), (42, 157), 
-                                (57, 42), (57, 57), (57, 142), (57, 157), 
-                                (142, 42), (142, 57), (142, 142), (142, 157), 
-                                (157, 42), (157, 57), (157, 142), (157, 157)]
-
-        sector_values = []
-        for query in self.red_query_list:
-            sector_values.append(self.img[query[1], query[0]])
-
-        # Dynamic thresholding to decode the values
-        self.red_threshold = self.dynamic_threshold_decode(sector_values)
-
-        for i, query in enumerate(self.red_query_list):
-            x, y = query
-            if self.img[y, x] > self.red_threshold:
-                self.red_matrix[i//4, i%4] = 0
-                ax.plot(x, y, 'ro')
-            else:
-                ax.plot(x, y, 'go')
-
-        plt.axis('off')
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.debug_dir, f'orientation_decoding_{centroid_group_id}.png'))
-        plt.close()
-
-        self.orientation_matrix = np.array([[self.red_matrix[0, 0] and self.red_matrix[0, 1] and self.red_matrix[1,0],
-                                        self.red_matrix[0, 2] and self.red_matrix[0, 3] and self.red_matrix[1,3]],
-                                        [self.red_matrix[2, 0] and self.red_matrix[3, 0] and self.red_matrix[3,1],
-                                        self.red_matrix[3, 3] and self.red_matrix[2, 3] and self.red_matrix[3,2]]], dtype=np.uint8)
-
-
-        print(f"Red matrix:\n{self.red_matrix}")
-
-        self.rotation = 0
-        if np.array_equal(self.orientation_matrix, np.array([[1, 1], [1, 0]])):
-            self.rotation = 0
-        elif np.array_equal(self.orientation_matrix, np.array([[1, 0], [1, 1]])):
-            self.rotation = -1
-        elif np.array_equal(self.orientation_matrix, np.array([[1, 1], [0, 1]])):
-            self.rotation = 1
-        elif np.array_equal(self.orientation_matrix, np.array([[0, 1], [1, 1]])):
-            self.rotation = 2
 
     def decode_green_sectors_debug(self, centroid_group_id) -> list:
-        self.green_matrix = np.ones((4, 8), dtype=np.uint8)
         fig, ax = plt.subplots(figsize=(10, 10))
         ax.imshow(self.img, cmap='gray')
-        # ax.set_title(f'Green Sectors Decoding - Centroid Group ID: {centroid_group_id}')
 
-        self.green_query_list = [(22, 38), (38, 22), (61, 22), (77, 38), (122, 38), (138, 22), (161, 22), (177, 38),
-                                    (22, 61), (38, 77), (61, 77), (77, 61), (122, 61), (138, 77), (161, 77), (177, 61),
-                                    (22, 138), (38, 122), (61, 122), (77, 138), (122, 138), (138, 122), (161, 122), (177, 138),
-                                    (22, 161), (38, 177), (61, 177), (77, 161), (122, 161), (138, 177), (161, 177), (177, 161)]
-
-        sector_values = []
+        adjusted_centers, rotation = self.get_adjusted_center_order()
+        all_sector_values = []
 
         # Collect all sector values first
-        for query in self.green_query_list:
-            sector_values.append(self.img[query[1], query[0]])
+        for center_idx, center in enumerate(adjusted_centers):
+            sector_values = []
+            for i in range(8):
+                angle = ((i + 2 * rotation) % 8 * np.pi / 4) + np.pi / 8
+                x = int(center[0] + self.average_radius * np.cos(angle))
+                y = int(center[1] + self.average_radius * np.sin(angle))
+                sector_values.append(self.img[y, x])
+                print(f"Center {center_idx}, Sector {i}: ({x}, {y}) - Value: {self.img[y, x]}")
+            all_sector_values.extend(sector_values)
 
         # Dynamic thresholding to decode the values
-        green_threshold = self.dynamic_threshold_decode(sector_values)
+        global_threshold = self.dynamic_threshold_decode(all_sector_values)
+        print(f"Global threshold: {global_threshold}")
+
         decoded_values = []
 
-        for i, query in enumerate(self.green_query_list):
-            x, y = query
-            if self.img[y, x] < green_threshold:
-                self.green_matrix[i//8, i%8] = 0
-                ax.plot(x, y, 'ro')
-            else:
-                ax.plot(x, y, 'go')
-        
-        print(f"Green matrix:\n{self.green_matrix}")
+        for center_idx, center in enumerate(adjusted_centers):
+            sector_values = []
+            for i in range(8):
+                angle = ((i + 2 * rotation) % 8 * np.pi / 4) + np.pi / 8
+                x = int(center[0] + self.average_radius * np.cos(angle))
+                y = int(center[1] + self.average_radius * np.sin(angle))    
+                sector_values.append(self.img[y, x])
+                ax.plot(x, y, 'go' if self.img[y, x] > global_threshold else 'ro')
+
+                if i == 0:
+                    ax.text(center[0]-12, center[1]-3, f"Center {center_idx}", fontsize=20, color='red')
+                    
+                    # Draw a radius to indicate the first marker
+                    start_x = center[0] + self.inner_radius * 2 * (np.cos(angle-np.pi/8))
+                    start_y = center[1] + self.inner_radius * 2 * (np.sin(angle-np.pi/8))
+                    end_x = int(center[0] + self.inner_radius * 4 * (np.cos(angle-np.pi/8)))
+                    end_y = int(center[1] + self.inner_radius * 4 * (np.sin(angle-np.pi/8)))
+                    ax.plot([start_x, end_x], [start_y, end_y], 'b-', linewidth=2)
+            
+            decoded_value = int(''.join(['1' if v > global_threshold else '0' for v in sector_values]), 2)
+            decoded_values.append(decoded_value)
+
+            print(f"Decoded value for center {center_idx}: {decoded_value}")
 
         plt.axis('off')
         plt.tight_layout()
         plt.savefig(os.path.join(self.debug_dir, f'green_sectors_decoding_{centroid_group_id}.png'))
         plt.close()
-        encoded_values = [self.green_matrix[3][3], self.green_matrix[3][2], self.green_matrix[3][1], self.green_matrix[3][0], 
-                            self.green_matrix[2][0], self.green_matrix[2][1], self.green_matrix[2][2], self.green_matrix[1][3], 
-                            self.green_matrix[1][2], self.green_matrix[1][1], self.green_matrix[1][0], self.green_matrix[0][0], 
-                            self.green_matrix[0][1], self.green_matrix[0][2], self.green_matrix[0][3]]
-
-        self.parity.append(self.red_matrix[1, 1] and self.red_matrix[2, 2])
-        self.parity.append(self.red_matrix[1, 2] and self.red_matrix[2, 1])
-        self.parity.append(self.green_matrix[2, 3] and self.green_matrix[1, 4])
-
-        # Convert list of 0s and 1s to binary string
-        binary_str = ''.join(str(bit) for bit in encoded_values)
-
-        print(f"Decoded values: {binary_str}")
-        
-        # Convert the binary string to an integer
-        decoded_values = [int(binary_str, 2)]
 
         return decoded_values
 
@@ -382,6 +377,7 @@ class PinTagDetector:
         return centroids
     
     def perspective_transform(self, centroids, centroid_group_id) -> None:
+        b_channel = self.lab[:,:,2]
         centroids = np.array(centroids, dtype="float32")
 
         center = np.mean(centroids, axis=0)
@@ -400,94 +396,70 @@ class PinTagDetector:
             [self.template_size//4, 3*self.template_size//4]], dtype="float32")
 
         M = cv2.getPerspectiveTransform(rect, dst)
+        self.img = cv2.warpPerspective(b_channel, M, (self.template_size, self.template_size))
         self.perspective_matrices[centroid_group_id] = M
-        self.inv_perspective_matrices[centroid_group_id] = np.linalg.inv(M)
-        self.inv_perspective = self.inv_perspective_matrices[centroid_group_id]
     
     def decode_orientation(self) -> None:
-        self.red_matrix = np.ones((4, 4), dtype=np.uint8)
-        self.red_query_list = [(42, 42), (42, 57), (42, 142), (42, 157), 
-                                (57, 42), (57, 57), (57, 142), (57, 157), 
-                                (142, 42), (142, 57), (142, 142), (142, 157), 
-                                (157, 42), (157, 57), (157, 142), (157, 157)]
-        
-        sector_values = []
-        for query in self.red_query_list:
-            transformed_query = self.inv_perspective.dot(np.append(query, 1))
-            transformed_query /= transformed_query[2]
-            sector_values.append(self.lab[:,:,2][int(transformed_query[1]), int(transformed_query[0])])
+        self.orientation_matrix = np.zeros((4, 4), dtype=np.uint8)
+
+        all_sector_values = []
+
+        for i, center in enumerate(self.centers):
+            sector_values = []
+            for j in range(4):
+                angle = (j * np.pi / 2) + (np.pi / 4)
+                x = int(center[0] + self.inner_radius * np.cos(angle))
+                y = int(center[1] + self.inner_radius * np.sin(angle))
+                sector_values.append(self.img[y, x])
+            all_sector_values.extend(sector_values)
 
         # Dynamic thresholding to decode the values
-        self.red_threshold = self.dynamic_threshold_decode(sector_values)
+        self.red_threshold = self.dynamic_threshold_decode(all_sector_values)
 
-        for i, value in enumerate(sector_values):
-            if value > self.red_threshold:
-                self.red_matrix[i//4, i%4] = 0
-
-        self.orientation_matrix = np.array([[self.red_matrix[0, 0] and self.red_matrix[0, 1] and self.red_matrix[1,0],
-                                        self.red_matrix[0, 2] and self.red_matrix[0, 3] and self.red_matrix[1,3]],
-                                        [self.red_matrix[2, 0] and self.red_matrix[3, 0] and self.red_matrix[3,1],
-                                        self.red_matrix[3, 3] and self.red_matrix[2, 3] and self.red_matrix[3,2]]], dtype=np.uint8)
-
-        self.rotation = 0
-        if np.array_equal(self.orientation_matrix, np.array([[1, 1], [1, 0]])):
-            self.rotation = 0
-        elif np.array_equal(self.orientation_matrix, np.array([[1, 0], [1, 1]])):
-            self.rotation = -1
-        elif np.array_equal(self.orientation_matrix, np.array([[1, 1], [0, 1]])):
-            self.rotation = 1
-        elif np.array_equal(self.orientation_matrix, np.array([[0, 1], [1, 1]])):
-            self.rotation = 2
+        for i, center in enumerate(self.centers):
+            for j in range(4):
+                angle = (j * np.pi / 2) + (np.pi / 4)
+                x = int(center[0] + self.inner_radius * np.cos(angle))
+                y = int(center[1] + self.inner_radius * np.sin(angle))
+                if self.img[y, x] > self.red_threshold:
+                    self.orientation_matrix[i, j] = 1
     
     def decode_green_sectors(self) -> list:
-        self.green_matrix = np.ones((4, 8), dtype=np.uint8)
-        self.green_query_list = [(22, 38), (38, 22), (61, 22), (77, 38), (122, 38), (138, 22), (161, 22), (177, 38),
-                                    (22, 61), (38, 77), (61, 77), (77, 61), (122, 61), (138, 77), (161, 77), (177, 61),
-                                    (22, 138), (38, 122), (61, 122), (77, 138), (122, 138), (138, 122), (161, 122), (177, 138),
-                                    (22, 161), (38, 177), (61, 177), (77, 161), (122, 161), (138, 177), (161, 177), (177, 161)]
+        values = []
+        adjusted_centers, rotation = self.get_adjusted_center_order()
+        all_sector_values = []
 
-        sector_values = []
+        for center in adjusted_centers:
+            for i in range(8):
+                angle = ((i + 2 * rotation) % 8 * np.pi / 4) + np.pi / 8
+                x = int(center[0] + self.average_radius * np.cos(angle))
+                y = int(center[1] + self.average_radius * np.sin(angle))
+                all_sector_values.append(self.img[y, x])
+        self.green_threshold = self.dynamic_threshold_decode(all_sector_values)
 
-        # Collect all sector values first
-        for query in self.green_query_list:
-            transformed_query = self.inv_perspective.dot(np.append(query, 1))
-            transformed_query /= transformed_query[2]
-            sector_values.append(self.lab[:,:,2][int(transformed_query[1]), int(transformed_query[0])])
+        for center in adjusted_centers:
+            sector_values = []
+            for i in range(8):
+                angle = ((i + 2 * rotation) % 8 * np.pi / 4) + np.pi / 8
+                x = int(center[0] + self.average_radius * np.cos(angle))
+                y = int(center[1] + self.average_radius * np.sin(angle))
+                sector_values.append(self.img[y, x])
+            
+            decoded_value = int(''.join(['1' if v > self.green_threshold else '0' for v in sector_values]), 2)
+            values.append(decoded_value)
 
-        # Dynamic thresholding to decode the values
-        green_threshold = self.dynamic_threshold_decode(sector_values)
-        decoded_values = []
-
-        for i, value in enumerate(sector_values):
-            if value < green_threshold:
-                self.green_matrix[i//8, i%8] = 0
-        
-        encoded_values = [self.green_matrix[3][3], self.green_matrix[3][2], self.green_matrix[3][1], self.green_matrix[3][0], 
-                            self.green_matrix[2][0], self.green_matrix[2][1], self.green_matrix[2][2], self.green_matrix[1][3], 
-                            self.green_matrix[1][2], self.green_matrix[1][1], self.green_matrix[1][0], self.green_matrix[0][0], 
-                            self.green_matrix[0][1], self.green_matrix[0][2], self.green_matrix[0][3]]
-
-        self.parity.append(self.red_matrix[1, 1] and self.red_matrix[2, 2])
-        self.parity.append(self.red_matrix[1, 2] and self.red_matrix[2, 1])
-        self.parity.append(self.green_matrix[2, 3] and self.green_matrix[1, 4])
-
-        # Convert list of 0s and 1s to binary string
-        binary_str = ''.join(str(bit) for bit in encoded_values)
-        
-        # Convert the binary string to an integer
-        decoded_values = [int(binary_str, 2)]
-
-        return decoded_values
+        return values
 
     def plot_normal_vectors(self, output_dir) -> None:
-        def transform_point(point, inv_perspective):
+        def transform_point(point):
             homogeneous = np.append(point, 1)
             transformed = inv_perspective.dot(homogeneous)
             return transformed
         
         for centroid_group_id in self.centroid_group_ids:
-            inv_perspective = self.inv_perspective_matrices[centroid_group_id]
-            unnormalized_coords = [transform_point(center, inv_perspective) for center in self.centers]
+            inv_perspective = np.linalg.inv(self.perspective_matrices[centroid_group_id])
+            
+            unnormalized_coords = [transform_point(center) for center in self.centers]
             
             if len(unnormalized_coords) >= 3:
                 origin = np.mean(unnormalized_coords, axis=0)
@@ -513,9 +485,9 @@ class PinTagDetector:
                 z_end = origin[:2] + normal[:2] * ((np.linalg.norm(np.array(x_end) - origin[:2]) + np.linalg.norm(np.array(y_end) - origin[:2])) / 2) / np.linalg.norm(normal[:2])
                 z_end = tuple(map(int, z_end))
 
-                cv2.line(self.original_img, origin_2d, x_end, (0, 0, 255), 5) 
-                cv2.line(self.original_img, origin_2d, y_end, (0, 255, 0), 5)
-                cv2.line(self.original_img, origin_2d, z_end, (255, 0, 0), 5)
+                cv2.line(self.original_img, origin_2d, x_end, (0, 0, 255), 20) 
+                cv2.line(self.original_img, origin_2d, y_end, (0, 255, 0), 20)
+                cv2.line(self.original_img, origin_2d, z_end, (255, 0, 0), 20)
         
         fig, ax = plt.subplots(figsize=(10, 10))
         ax.imshow(cv2.cvtColor(self.original_img, cv2.COLOR_BGR2RGB))
@@ -599,6 +571,7 @@ class PinTagDetector:
                 return None
             
             print("Red circles detected")
+
             self.group_centroids(centroids)
             
             results = []
@@ -612,8 +585,12 @@ class PinTagDetector:
                 values = self.decode_green_sectors_debug(centroid_group_id)
                 print("Green sectors decoded")
                 
-                results.append(values)
-                print(f"Results for centroid group {centroid_group_id}: {values}")
+                checksum = values.pop()
+                if sum(values) != checksum:
+                    print(f"Checksum verification failed: {sum(values)} != {checksum}")
+                else:
+                    print(f"Results for centroid group {centroid_group_id}: {values}")
+                    results.append(values)
 
             self.original_img = img.copy()
             self.plot_normal_vectors(output_dir=self.debug_dir)
@@ -636,7 +613,12 @@ class PinTagDetector:
             self.perspective_transform(self.centroid_groups[centroid_group_id], centroid_group_id)
             self.decode_orientation()
             values = self.decode_green_sectors()
-            results.append(values)
+            checksum = values.pop()
+
+            if sum(values) != checksum:
+                continue
+            else:
+                results.append(values)
         
         if self.plot_normals:
             self.original_img = img.copy()
@@ -665,8 +647,10 @@ def main() -> None:
     
     img = cv2.imread(args.input_image)
     results = detector.detect(img)
+
     if results:
         for result in results:
+            result = f"{result[0]:02d}{result[1]:02d}{result[2]:02d}"
             print(f"Detected PinTag values: {result}")
     else:
         print("Failed to detect any PinTags")
